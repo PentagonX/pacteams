@@ -1,297 +1,279 @@
-// ===== Utility =====
-const rand = (a,b)=>Math.random()*(b-a)+a;
-const clamp = (v,a,b)=>Math.max(a, Math.min(b,v));
-const now = ()=>performance.now();
+// =============================
+// Diep.io-like Game Script (Reworked)
+// =============================
 
-// ===== Canvas Setup =====
-const canvas = document.getElementById('game');
-const ctx = canvas.getContext('2d');
-function resize(){ canvas.width = innerWidth; canvas.height = innerHeight; }
-addEventListener('resize', resize); resize();
+const canvas = document.getElementById("gameCanvas");
+const ctx = canvas.getContext("2d");
+canvas.width = window.innerWidth;
+canvas.height = window.innerHeight;
 
-// ===== World Config =====
-const WORLD = { w: 5000, h: 5000 }; // bigger map
-const GRID = 120;
+// ======= GAME SETTINGS =======
+const world = { width: 3000, height: 3000 };
+const keys = {};
+let bullets = [];
+let xpDots = [];
+let enemies = [];
+let walls = [];
 
-// ===== Player =====
+// Debug menu toggle
+let debugMode = false;
+
+// ======= PLAYER =======
 const player = {
-  id: 'me',
-  name: 'Tanky',
-  x: WORLD.w/2, y: WORLD.h/2, r: 18,
-  speed: 220,
-  baseSpeed: 220,
-  vx:0, vy:0,
-  angle: 0,
-  color: '#9dd0ff',
-  hp: 100, maxHp: 100,
-  fireCooldown: 0,
-  baseFireRate: 0.33,
+  id: "local",
+  x: world.width / 2,
+  y: world.height / 2,
+  size: 20,
+  color: "blue",
+  speed: 3,
   bulletSize: 8,
-  stats: { size:0, reload:0, speed:0, hp:0 },
-  level: 1, xp: 0, points: 0
+  reloadTime: 500,
+  lastShot: 0,
+  hp: 100,
+  xp: 0,
+  level: 1,
+  name: "Player",
 };
 
-// Other players (multiplayer ready structure)
-const players = { [player.id]: player };
+// Multiplayer placeholder
+const players = { local: player };
 
-function xpForLevel(level){
-  return Math.floor(20 * Math.pow(1.25, level-1));
+// ======= WORLD SETUP =======
+function initWorld() {
+  // Walls
+  walls = [
+    { x: 200, y: 200, w: 600, h: 40 },
+    { x: 1000, y: 800, w: 40, h: 600 },
+    { x: 1500, y: 400, w: 800, h: 40 },
+    { x: 2200, y: 1200, w: 40, h: 800 },
+  ];
+
+  // XP dots
+  for (let i = 0; i < 100; i++) {
+    xpDots.push({
+      x: Math.random() * world.width,
+      y: Math.random() * world.height,
+      size: 15, // bigger hitbox
+      color: "green",
+    });
+  }
+
+  // Wandering enemies
+  for (let i = 0; i < 20; i++) {
+    enemies.push({
+      x: Math.random() * world.width,
+      y: Math.random() * world.height,
+      size: 25,
+      color: "red",
+      speed: 1 + Math.random() * 1.5,
+      dir: Math.random() * Math.PI * 2,
+      hp: 30,
+    });
+  }
 }
 
-// ===== Camera =====
-const camera = { x:0, y:0 };
-function updateCamera(){
-  camera.x = clamp(player.x - canvas.width/2, 0, WORLD.w - canvas.width);
-  camera.y = clamp(player.y - canvas.height/2, 0, WORLD.h - canvas.height);
-}
-
-// ===== Input =====
-const keys = new Set();
-addEventListener('keydown', e=>{ if(['KeyW','KeyA','KeyS','KeyD','KeyM'].includes(e.code)) e.preventDefault(); keys.add(e.code);
-  if(e.code==='KeyM'){ toggleMenu(); }
+// ======= INPUT HANDLING =======
+window.addEventListener("keydown", e => {
+  keys[e.key] = true;
+  if (e.key === "[") debugMode = !debugMode;
 });
-addEventListener('keyup', e=> keys.delete(e.code));
+window.addEventListener("keyup", e => delete keys[e.key]);
 
-let mouse = { x:0, y:0, worldX:0, worldY:0, down:false };
-canvas.addEventListener('mousemove', e=>{
-  const rect = canvas.getBoundingClientRect();
-  mouse.x = e.clientX - rect.left; mouse.y = e.clientY - rect.top;
-  mouse.worldX = mouse.x + camera.x; mouse.worldY = mouse.y + camera.y;
+// Mouse aiming
+let mouseX = 0, mouseY = 0;
+window.addEventListener("mousemove", e => {
+  mouseX = e.clientX;
+  mouseY = e.clientY;
 });
-canvas.addEventListener('mousedown', ()=> mouse.down = true);
-addEventListener('mouseup', ()=> mouse.down = false);
+window.addEventListener("mousedown", shoot);
 
-// ===== Maze Walls =====
-const walls = [];
-function addWall(x,y,w,h){ walls.push({x,y,w,h}); }
-// Border walls
-addWall(-50, -50, WORLD.w+100, 50);
-addWall(-50, WORLD.h, WORLD.w+100, 50);
-addWall(-50, 0, 50, WORLD.h);
-addWall(WORLD.w, 0, 50, WORLD.h);
-// Some random walls for a new map style
-for(let i=0;i<25;i++){
-  addWall(rand(200, WORLD.w-400), rand(200, WORLD.h-400), rand(200,600), 30);
-}
-for(let i=0;i<25;i++){
-  addWall(rand(200, WORLD.w-400), rand(200, WORLD.h-400), 30, rand(200,600));
-}
+// ======= SHOOTING =======
+function shoot() {
+  const now = Date.now();
+  if (now - player.lastShot < player.reloadTime) return;
+  player.lastShot = now;
 
-// ===== XP Dots (enemies) =====
-const dots = [];
-const DOT_COUNT = 800; // more enemies
-function placeDot(){
-  for(let k=0;k<30;k++){
-    const x = rand(80, WORLD.w-80);
-    const y = rand(80, WORLD.h-80);
-    const r = rand(6, 14); // larger hitboxes
-    const col = '#6bf0a6';
-    const rect = {x:x-r, y:y-r, w:r*2, h:r*2};
-    if(!collidesRectWalls(rect)) { dots.push({x,y,r, color:col, hp:r, xp: Math.ceil(r)}); return; }
-  }
-}
-for(let i=0;i<DOT_COUNT;i++) placeDot();
-
-// ===== Bullets =====
-const bullets = [];
-function shoot(){
-  const cd = Math.max(0.08, player.baseFireRate * Math.pow(0.9, player.stats.reload));
-  if(player.fireCooldown>0) return;
-  player.fireCooldown = cd;
-  const angle = Math.atan2(mouse.worldY - player.y, mouse.worldX - player.x);
-  const speed = 700;
-  const size = player.bulletSize + player.stats.size * 2;
-  bullets.push({owner: player.id, x: player.x + Math.cos(angle)*(player.r+size+6), y: player.y + Math.sin(angle)*(player.r+size+6),
-                vx: Math.cos(angle)*speed, vy: Math.sin(angle)*speed, r: size, life: 1.2});
-}
-
-// ===== Collision Helpers =====
-function circleRectIntersect(cx, cy, r, rx, ry, rw, rh){
-  const nx = clamp(cx, rx, rx+rw);
-  const ny = clamp(cy, ry, ry+rh);
-  const dx = cx - nx, dy = cy - ny;
-  return dx*dx + dy*dy <= r*r;
-}
-function collidesCircleWalls(cx,cy,r){
-  for(const w of walls){ if(circleRectIntersect(cx,cy,r,w.x,w.y,w.w,w.h)) return true; }
-  return false;
-}
-function collidesRectWalls(rect){
-  for(const w of walls){ if(!(rect.x+rect.w < w.x || rect.x > w.x+w.w || rect.y+rect.h < w.y || rect.y > w.y+w.h)) return true; }
-  return false;
-}
-
-function moveWithCollision(ent, dt){
-  let nx = ent.x + ent.vx * dt;
-  if(!collidesCircleWalls(nx, ent.y, ent.r)) ent.x = nx;
-  let ny = ent.y + ent.vy * dt;
-  if(!collidesCircleWalls(ent.x, ny, ent.r)) ent.y = ny;
-  ent.x = clamp(ent.x, ent.r+2, WORLD.w-ent.r-2);
-  ent.y = clamp(ent.y, ent.r+2, WORLD.h-ent.r-2);
-}
-
-// ===== Game Loop =====
-let last = now();
-function tick(){
-  const t = now();
-  let dt = (t - last)/1000; if(dt>0.05) dt=0.05; last = t;
-
-  // Input -> velocity
-  const sp = (player.baseSpeed + player.stats.speed*18);
-  const ax = (keys.has('KeyD')?1:0) - (keys.has('KeyA')?1:0);
-  const ay = (keys.has('KeyS')?1:0) - (keys.has('KeyW')?1:0);
-  const len = Math.hypot(ax,ay) || 1;
-  player.vx = (ax/len) * sp;
-  player.vy = (ay/len) * sp;
-
-  player.angle = Math.atan2(mouse.worldY - player.y, mouse.worldX - player.x);
-  if(mouse.down) shoot();
-  if(player.fireCooldown>0) player.fireCooldown -= dt;
-
-  moveWithCollision(player, dt);
-
-  // Update bullets
-  for(let i=bullets.length-1;i>=0;i--){
-    const b = bullets[i];
-    b.x += b.vx*dt; b.y += b.vy*dt; b.life -= dt;
-    for(let j=dots.length-1;j>=0;j--){
-      const d = dots[j];
-      const dist2 = (d.x-b.x)*(d.x-b.x)+(d.y-b.y)*(d.y-b.y);
-      if(dist2 <= (d.r+b.r)*(d.r+b.r)){
-        d.hp -= Math.max(1, Math.floor(b.r/5));
-        b.life -= 0.15;
-        if(d.hp<=0){ player.xp += d.xp; dots.splice(j,1); placeDot(); }
-      }
-    }
-    if(b.life<=0) bullets.splice(i,1);
-  }
-
-  const need = xpForLevel(player.level);
-  if(player.xp >= need){ player.xp -= need; player.level++; player.points++; player.maxHp += 5; player.hp = Math.min(player.hp+5, player.maxHp); }
-
-  updateCamera();
-  draw();
-  requestAnimationFrame(tick);
-}
-
-// ===== Drawing =====
-function drawGrid(){
-  const startX = Math.floor(camera.x/GRID)*GRID;
-  const startY = Math.floor(camera.y/GRID)*GRID;
-  ctx.lineWidth = 1;
-  ctx.strokeStyle = 'rgba(255,255,255,0.06)';
-  for(let x=startX; x<camera.x+canvas.width; x+=GRID){
-    ctx.beginPath(); ctx.moveTo(x-camera.x, 0); ctx.lineTo(x-camera.x, canvas.height); ctx.stroke();
-  }
-  for(let y=startY; y<camera.y+canvas.height; y+=GRID){
-    ctx.beginPath(); ctx.moveTo(0, y-camera.y); ctx.lineTo(canvas.width, y-camera.y); ctx.stroke();
-  }
-}
-
-function drawWalls(){
-  ctx.fillStyle = '#2a2f54';
-  for(const w of walls){
-    const x = w.x - camera.x, y = w.y - camera.y;
-    if(x+w.w<0||y+w.h<0||x>canvas.width||y>canvas.height) continue;
-    ctx.fillRect(x,y,w.w,w.h);
-  }
-}
-
-function drawDots(){
-  for(const d of dots){
-    const x = d.x - camera.x, y = d.y - camera.y;
-    if(x<-30||y<-30||x>canvas.width+30||y>canvas.height+30) continue;
-    ctx.beginPath(); ctx.arc(x,y,d.r,0,Math.PI*2);
-    ctx.fillStyle = d.color; ctx.fill();
-  }
-}
-
-function drawBullets(){
-  ctx.fillStyle = '#ffd08a';
-  for(const b of bullets){
-    const x = b.x - camera.x, y = b.y - camera.y;
-    ctx.beginPath(); ctx.arc(x,y,b.r,0,Math.PI*2); ctx.fill();
-  }
-}
-
-function drawPlayers(){
-  for(const id in players){
-    const p = players[id];
-    const x = p.x - camera.x, y = p.y - camera.y;
-    ctx.beginPath(); ctx.arc(x,y,p.r,0,Math.PI*2); ctx.fillStyle = p.color; ctx.fill();
-    ctx.save(); ctx.translate(x,y); ctx.rotate(p.angle);
-    ctx.fillStyle = '#c8e6ff'; ctx.fillRect(0,-5, p.r+14, 10);
-    ctx.restore();
-    ctx.font = '12px sans-serif'; ctx.textAlign = 'center'; ctx.fillStyle = 'white';
-    ctx.fillText(p.name, x, y-p.r-12);
-  }
-}
-
-function draw(){
-  ctx.clearRect(0,0,canvas.width,canvas.height);
-  drawGrid();
-  drawWalls();
-  drawDots();
-  drawBullets();
-  drawPlayers();
-  drawUI();
-  drawMinimap();
-}
-
-function drawUI(){
-  document.getElementById('playerName').textContent = player.name;
-  document.getElementById('levelText').textContent = player.level;
-  const need = xpForLevel(player.level);
-  document.getElementById('xpText').textContent = `${player.xp} / ${need}`;
-  const pct = clamp(player.xp / need, 0, 1) * 100;
-  document.getElementById('levelFill').style.width = pct + '%';
-}
-
-function drawMinimap(){
-  const m = document.getElementById('minimap');
-  const mctx = m.getContext('2d');
-  const mw = m.width, mh = m.height;
-  mctx.clearRect(0,0,mw,mh);
-  mctx.fillStyle = 'rgba(255,255,255,0.08)';
-  mctx.fillRect(0,0,mw,mh);
-
-  const sx = mw / WORLD.w; const sy = mh / WORLD.h;
-  mctx.fillStyle = 'rgba(255,255,255,0.35)';
-  for(const w of walls){ mctx.fillRect(w.x*sx, w.y*sy, w.w*sx, w.h*sy); }
-
-  for(const id in players){
-    const p = players[id];
-    mctx.fillStyle = id===player.id ? '#6bd6ff' : '#ff6b6b';
-    mctx.beginPath(); mctx.arc(p.x*sx, p.y*sy, 4, 0, Math.PI*2); mctx.fill();
-  }
-
-  mctx.strokeStyle = 'rgba(107,214,255,0.8)'; mctx.strokeRect(camera.x*sx, camera.y*sy, canvas.width*sx, canvas.height*sy);
-}
-
-// ===== Menu / Upgrades =====
-const menuEl = document.getElementById('menu');
-const pointsText = document.getElementById('pointsText');
-function toggleMenu(){ menuEl.classList.toggle('active'); }
-menuEl.addEventListener('click', (e)=>{ if(e.target===menuEl) toggleMenu(); });
-for(const btn of menuEl.querySelectorAll('button[data-up]')){
-  btn.addEventListener('click', ()=>{
-    if(player.points<=0) return;
-    const key = btn.getAttribute('data-up');
-    player.stats[key]++;
-    player.points--;
-    if(key==='size') player.bulletSize += 1;
-    if(key==='hp'){ player.maxHp += 10; player.hp = player.maxHp; }
-    updateUpgradeUI();
+  const angle = Math.atan2(mouseY - canvas.height / 2, mouseX - canvas.width / 2);
+  bullets.push({
+    x: player.x,
+    y: player.y,
+    vx: Math.cos(angle) * 8,
+    vy: Math.sin(angle) * 8,
+    size: player.bulletSize,
+    owner: player.id,
   });
 }
-function updateUpgradeUI(){
-  pointsText.textContent = player.points;
-  document.getElementById('lvlSize').textContent = `Lv. ${player.stats.size}`;
-  document.getElementById('lvlReload').textContent = `Lv. ${player.stats.reload}`;
-  document.getElementById('lvlSpeed').textContent = `Lv. ${player.stats.speed}`;
-  document.getElementById('lvlHP').textContent = `Lv. ${player.stats.hp}`;
+
+// ======= UPDATE LOOP =======
+function update() {
+  // Movement
+  if (keys["w"]) player.y -= player.speed;
+  if (keys["s"]) player.y += player.speed;
+  if (keys["a"]) player.x -= player.speed;
+  if (keys["d"]) player.x += player.speed;
+
+  // Wall collision
+  for (let wall of walls) {
+    if (rectCircleCollide(player, wall)) {
+      if (keys["w"]) player.y += player.speed;
+      if (keys["s"]) player.y -= player.speed;
+      if (keys["a"]) player.x += player.speed;
+      if (keys["d"]) player.x -= player.speed;
+    }
+  }
+
+  // Bullets update
+  bullets.forEach(b => {
+    b.x += b.vx;
+    b.y += b.vy;
+  });
+
+  // XP dots collision
+  xpDots = xpDots.filter(dot => {
+    for (let b of bullets) {
+      if (dist(dot.x, dot.y, b.x, b.y) < dot.size + b.size) {
+        player.xp += 10;
+        return false;
+      }
+    }
+    if (dist(dot.x, dot.y, player.x, player.y) < dot.size + player.size) {
+      player.xp += 5;
+      return false;
+    }
+    return true;
+  });
+
+  // Enemy wandering
+  for (let e of enemies) {
+    e.x += Math.cos(e.dir) * e.speed;
+    e.y += Math.sin(e.dir) * e.speed;
+    if (Math.random() < 0.01) e.dir = Math.random() * Math.PI * 2;
+
+    // Bullets damage enemies
+    bullets = bullets.filter(b => {
+      if (dist(b.x, b.y, e.x, e.y) < e.size + b.size) {
+        e.hp -= 10;
+        if (e.hp <= 0) {
+          player.xp += 50;
+          enemies = enemies.filter(en => en !== e);
+        }
+        return false;
+      }
+      return true;
+    });
+  }
+
+  // Level up
+  if (player.xp >= player.level * 100) {
+    player.level++;
+    player.xp = 0;
+  }
 }
 
-// ===== Start =====
-updateUpgradeUI();
-requestAnimationFrame(tick);
+// ======= DRAW LOOP =======
+function draw() {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  // Camera offset
+  const offsetX = canvas.width / 2 - player.x;
+  const offsetY = canvas.height / 2 - player.y;
+
+  // Walls
+  ctx.fillStyle = "grey";
+  for (let wall of walls) ctx.fillRect(wall.x + offsetX, wall.y + offsetY, wall.w, wall.h);
+
+  // XP dots
+  for (let dot of xpDots) {
+    ctx.fillStyle = dot.color;
+    ctx.beginPath();
+    ctx.arc(dot.x + offsetX, dot.y + offsetY, dot.size, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // Enemies
+  for (let e of enemies) {
+    ctx.fillStyle = e.color;
+    ctx.beginPath();
+    ctx.arc(e.x + offsetX, e.y + offsetY, e.size, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // Bullets
+  ctx.fillStyle = "black";
+  for (let b of bullets) {
+    ctx.beginPath();
+    ctx.arc(b.x + offsetX, b.y + offsetY, b.size, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // Player
+  ctx.fillStyle = player.color;
+  ctx.beginPath();
+  ctx.arc(canvas.width / 2, canvas.height / 2, player.size, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Player name
+  ctx.fillStyle = "black";
+  ctx.font = "16px Arial";
+  ctx.textAlign = "center";
+  ctx.fillText(player.name, canvas.width / 2, canvas.height / 2 - player.size - 10);
+
+  // XP bar
+  ctx.fillStyle = "lightgrey";
+  ctx.fillRect(20, 20, 200, 20);
+  ctx.fillStyle = "blue";
+  ctx.fillRect(20, 20, (player.xp / (player.level * 100)) * 200, 20);
+  ctx.strokeRect(20, 20, 200, 20);
+
+  // Minimap
+  const mmSize = 150;
+  ctx.fillStyle = "rgba(0,0,0,0.2)";
+  ctx.fillRect(canvas.width - mmSize - 20, canvas.height - mmSize - 20, mmSize, mmSize);
+  ctx.fillStyle = "red";
+  ctx.fillRect(canvas.width - mmSize - 20 + (player.x / world.width) * mmSize, canvas.height - mmSize - 20 + (player.y / world.height) * mmSize, 5, 5);
+
+  // Debug menu
+  if (debugMode) {
+    ctx.fillStyle = "rgba(0,0,0,0.7)";
+    ctx.fillRect(20, 60, 250, 160);
+    ctx.fillStyle = "white";
+    ctx.font = "14px Arial";
+    ctx.textAlign = "left";
+    ctx.fillText("DEBUG MENU (press [ to toggle)", 30, 80);
+    ctx.fillText("1: Increase Speed", 30, 100);
+    ctx.fillText("2: Increase Bullet Size", 30, 120);
+    ctx.fillText("3: Faster Reload", 30, 140);
+    ctx.fillText("4: Increase HP", 30, 160);
+  }
+}
+
+// ======= DEBUG CONTROLS =======
+window.addEventListener("keydown", e => {
+  if (!debugMode) return;
+  switch (e.key) {
+    case "1": player.speed += 1; break;
+    case "2": player.bulletSize += 2; break;
+    case "3": player.reloadTime = Math.max(100, player.reloadTime - 50); break;
+    case "4": player.hp += 20; break;
+  }
+});
+
+// ======= HELPERS =======
+function dist(x1, y1, x2, y2) {
+  return Math.hypot(x2 - x1, y2 - y1);
+}
+function rectCircleCollide(circle, rect) {
+  let cx = Math.max(rect.x, Math.min(circle.x, rect.x + rect.w));
+  let cy = Math.max(rect.y, Math.min(circle.y, rect.y + rect.h));
+  return dist(circle.x, circle.y, cx, cy) < circle.size;
+}
+
+// ======= GAME LOOP =======
+function gameLoop() {
+  update();
+  draw();
+  requestAnimationFrame(gameLoop);
+}
+
+initWorld();
+gameLoop();
