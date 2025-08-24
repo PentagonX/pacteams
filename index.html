@@ -1,10 +1,418 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <title>PacTeams</title>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>PacTeams</title>
+  <style>
+    html, body {
+      margin: 0; height: 100%; overflow: hidden; background: #0f1221; color: #e7ebff;
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, 'Helvetica Neue', Arial, sans-serif;
+    }
+    #game { display: block; width: 100vw; height: 100vh; background: radial-gradient(1200px 800px at 50% 50%, #151936, #0f1221 60%); }
+    .ui {
+      position: fixed; inset: 0; pointer-events: none;
+    }
+    .topbar {
+      position: absolute; left: 16px; top: 12px; display: flex; gap: 8px; align-items: center; pointer-events: none;
+      text-shadow: 0 1px 0 rgba(0,0,0,.35);
+    }
+    .chip { background: rgba(255,255,255,.08); border: 1px solid rgba(255,255,255,.14); padding: 6px 10px; border-radius: 999px; font-size: 12px; }
+    .levelbar {
+      position: absolute; left: 50%; transform: translateX(-50%);
+      bottom: 14px; width: min(720px, 80vw); height: 14px; border-radius: 10px; overflow: hidden; border: 1px solid rgba(255,255,255,.2);
+      background: rgba(255,255,255,.06);
+    }
+    .levelbar > .fill { height: 100%; width: 0%; background: linear-gradient(90deg, #5bc6ff, #a28bff); box-shadow: inset 0 0 10px rgba(255,255,255,.3);
+    }
+    /* Minimap box */
+    .minimap {
+      position: absolute; right: 16px; bottom: 16px; width: 220px; height: 160px; border-radius: 12px; overflow: hidden; border: 1px solid rgba(255,255,255,.18);
+      background: rgba(255,255,255,.06); backdrop-filter: blur(6px);
+    }
+
+    /* Upgrade/Menu overlay */
+    .menu {
+      position: absolute; inset: 0; display: none; align-items: center; justify-content: center; background: rgba(10,12,20,.55);
+      backdrop-filter: blur(4px); pointer-events: auto;
+    }
+    .menu.active { display: flex; }
+    .panel {
+      width: min(720px, 92vw); border-radius: 18px; padding: 18px; background: #12162c; border: 1px solid rgba(255,255,255,.14);
+      box-shadow: 0 10px 30px rgba(0,0,0,.35);
+    }
+    .panel h2 { margin: 0 0 8px; font-weight: 700; letter-spacing: .2px; }
+    .upgrades { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; }
+    .card { background: rgba(255,255,255,.06); border: 1px solid rgba(255,255,255,.14); padding: 12px; border-radius: 14px; }
+    .card h4 { margin: 0 0 6px; }
+    .card button { pointer-events: auto; cursor: pointer; border: none; padding: 8px 10px; border-radius: 10px; font-weight: 600; background: #4ea5ff; color: white; }
+    .row { display:flex; align-items:center; justify-content:space-between; gap: 8px; margin: 4px 0 0; }
+    .notice { font-size: 12px; opacity: .8; }
+  </style>
 </head>
 <body>
+  <canvas id="game"></canvas>
+  <div class="ui">
+    <div class="topbar">
+      <div class="chip" id="nameChip">Player: <b id="playerName">Tanky</b></div>
+      <div class="chip" id="levelChip">Level: <b id="levelText">1</b></div>
+      <div class="chip" id="xpChip">XP: <b id="xpText">0 / 20</b></div>
+      <div class="chip">Move: <b>WASD</b> &nbsp; Aim/Shoot: <b>Mouse</b> &nbsp; Menu: <b>M</b></div>
+    </div>
+    <div class="levelbar"><div class="fill" id="levelFill"></div></div>
+    <div class="minimap"><canvas id="minimap" width="220" height="160"></canvas></div>
+    <div class="menu" id="menu">
+      <div class="panel">
+        <h2>Upgrade Menu</h2>
+        <p class="notice">You have <b id="pointsText">0</b> upgrade point(s). Earn XP by shooting dots. Press <b>M</b> to close.</p>
+        <div class="upgrades">
+          <div class="card"><h4>Bullet Size</h4><p>Make bullets larger (more damage).</p><div class="row"><span id="lvlSize">Lv. 0</span><button data-up="size">Upgrade</button></div></div>
+          <div class="card"><h4>Reload</h4><p>Reduce cooldown between shots.</p><div class="row"><span id="lvlReload">Lv. 0</span><button data-up="reload">Upgrade</button></div></div>
+          <div class="card"><h4>Speed</h4><p>Move a bit faster.</p><div class="row"><span id="lvlSpeed">Lv. 0</span><button data-up="speed">Upgrade</button></div></div>
+          <div class="card"><h4>Max HP</h4><p>More survivability.</p><div class="row"><span id="lvlHP">Lv. 0</span><button data-up="hp">Upgrade</button></div></div>
+        </div>
+      </div>
+    </div>
+  </div>
 
+  <script>
+  // ===== Utility =====
+  const rand = (a,b)=>Math.random()*(b-a)+a;
+  const clamp = (v,a,b)=>Math.max(a, Math.min(b,v));
+  const now = ()=>performance.now();
+
+  // ===== Canvas Setup =====
+  const canvas = document.getElementById('game');
+  const ctx = canvas.getContext('2d');
+  function resize(){ canvas.width = innerWidth; canvas.height = innerHeight; }
+  addEventListener('resize', resize); resize();
+
+  // ===== World Config =====
+  const WORLD = { w: 4000, h: 3000 };
+  const GRID = 100;
+
+  // ===== Player =====
+  const player = {
+    name: 'Tanky',
+    x: WORLD.w/2, y: WORLD.h/2, r: 18,
+    speed: 220, // px/s
+    baseSpeed: 220,
+    vx:0, vy:0,
+    angle: 0,
+    color: '#9dd0ff',
+    hp: 100, maxHp: 100,
+    fireCooldown: 0,
+    baseFireRate: 0.33, // seconds between shots
+    bulletSize: 8,
+    stats: { size:0, reload:0, speed:0, hp:0 },
+    level: 1, xp: 0, points: 0
+  };
+
+  function xpForLevel(level){
+    // Growing requirement
+    return Math.floor(20 * Math.pow(1.25, level-1));
+  }
+
+  // ===== Camera =====
+  const camera = { x:0, y:0 };
+  function updateCamera(){
+    camera.x = clamp(player.x - canvas.width/2, 0, WORLD.w - canvas.width);
+    camera.y = clamp(player.y - canvas.height/2, 0, WORLD.h - canvas.height);
+  }
+
+  // ===== Input =====
+  const keys = new Set();
+  addEventListener('keydown', e=>{ if(['KeyW','KeyA','KeyS','KeyD','KeyM'].includes(e.code)) e.preventDefault(); keys.add(e.code);
+    if(e.code==='KeyM'){ toggleMenu(); }
+  });
+  addEventListener('keyup', e=> keys.delete(e.code));
+
+  let mouse = { x:0, y:0, worldX:0, worldY:0, down:false };
+  canvas.addEventListener('mousemove', e=>{
+    const rect = canvas.getBoundingClientRect();
+    mouse.x = e.clientX - rect.left; mouse.y = e.clientY - rect.top;
+    mouse.worldX = mouse.x + camera.x; mouse.worldY = mouse.y + camera.y;
+  });
+  canvas.addEventListener('mousedown', ()=> mouse.down = true);
+  addEventListener('mouseup', ()=> mouse.down = false);
+
+  // ===== Maze Walls (rectangles) =====
+  /** Simple handcrafted maze + border walls */
+  const walls = [];
+  function addWall(x,y,w,h){ walls.push({x,y,w,h}); }
+  // Border walls
+  addWall(-50, -50, WORLD.w+100, 50);
+  addWall(-50, WORLD.h, WORLD.w+100, 50);
+  addWall(-50, 0, 50, WORLD.h);
+  addWall(WORLD.w, 0, 50, WORLD.h);
+  // Maze corridors (example layout)
+  for(let i=1;i<10;i++) addWall(i*350, 600, 22, 1700);
+  for(let i=1;i<6;i++) addWall(400, i*400, 1400, 22);
+  addWall(2100, 300, 22, 2000);
+  addWall(2100, 2300, 1300, 22);
+  addWall(3000, 600, 22, 1600);
+  addWall(3000, 600, 700, 22);
+
+  // ===== XP Dots =====
+  const dots = [];
+  const DOT_COUNT = 420;
+  function placeDot(){
+    // Try several times to avoid spawning inside walls
+    for(let k=0;k<30;k++){
+      const x = rand(80, WORLD.w-80);
+      const y = rand(80, WORLD.h-80);
+      const r = rand(5, 10); // different sizes
+      const col = '#6bf0a6';
+      const rect = {x:x-r, y:y-r, w:r*2, h:r*2};
+      if(!collidesRectWalls(rect)) { dots.push({x,y,r, color:col, hp:r, xp: Math.ceil(r)}); return; }
+    }
+  }
+  for(let i=0;i<DOT_COUNT;i++) placeDot();
+
+  // ===== Bullets =====
+  const bullets = [];
+  function shoot(){
+    const cd = Math.max(0.08, player.baseFireRate * Math.pow(0.9, player.stats.reload));
+    if(player.fireCooldown>0) return;
+    player.fireCooldown = cd;
+    const angle = Math.atan2(mouse.worldY - player.y, mouse.worldX - player.x);
+    const speed = 700;
+    const size = player.bulletSize + player.stats.size * 2;
+    bullets.push({x: player.x + Math.cos(angle)*(player.r+size+6), y: player.y + Math.sin(angle)*(player.r+size+6),
+                  vx: Math.cos(angle)*speed, vy: Math.sin(angle)*speed, r: size, life: 1.2});
+  }
+
+  // ===== Collision Helpers =====
+  function circleRectIntersect(cx, cy, r, rx, ry, rw, rh){
+    const nx = clamp(cx, rx, rx+rw);
+    const ny = clamp(cy, ry, ry+rh);
+    const dx = cx - nx, dy = cy - ny;
+    return dx*dx + dy*dy <= r*r;
+  }
+  function collidesCircleWalls(cx,cy,r){
+    for(const w of walls){ if(circleRectIntersect(cx,cy,r,w.x,w.y,w.w,w.h)) return true; }
+    return false;
+  }
+  function collidesRectWalls(rect){
+    for(const w of walls){ if(!(rect.x+rect.w < w.x || rect.x > w.x+w.w || rect.y+rect.h < w.y || rect.y > w.y+w.h)) return true; }
+    return false;
+  }
+
+  // Move with collision (separate axis)
+  function moveWithCollision(ent, dt){
+    let nx = ent.x + ent.vx * dt;
+    if(!collidesCircleWalls(nx, ent.y, ent.r)) ent.x = nx; else {
+      // slide: try small steps toward collision
+      const sign = Math.sign(ent.vx);
+      let step = ent.vx * dt;
+      while(Math.abs(step) > 0.5){
+        const tryX = ent.x + Math.sign(step) * 0.5;
+        if(collidesCircleWalls(tryX, ent.y, ent.r)) break; ent.x = tryX; step -= Math.sign(step) * 0.5;
+      }
+    }
+    let ny = ent.y + ent.vy * dt;
+    if(!collidesCircleWalls(ent.x, ny, ent.r)) ent.y = ny; else {
+      const sign = Math.sign(ent.vy);
+      let step = ent.vy * dt;
+      while(Math.abs(step) > 0.5){
+        const tryY = ent.y + Math.sign(step) * 0.5;
+        if(collidesCircleWalls(ent.x, tryY, ent.r)) break; ent.y = tryY; step -= Math.sign(step) * 0.5;
+      }
+    }
+    ent.x = clamp(ent.x, player.r+2, WORLD.w-player.r-2);
+    ent.y = clamp(ent.y, player.r+2, WORLD.h-player.r-2);
+  }
+
+  // ===== Game Loop =====
+  let last = now();
+  function tick(){
+    const t = now();
+    let dt = (t - last)/1000; if(dt>0.05) dt=0.05; last = t;
+
+    // Input -> velocity
+    const sp = (player.baseSpeed + player.stats.speed*18);
+    const ax = (keys.has('KeyD')?1:0) - (keys.has('KeyA')?1:0);
+    const ay = (keys.has('KeyS')?1:0) - (keys.has('KeyW')?1:0);
+    const len = Math.hypot(ax,ay) || 1;
+    player.vx = (ax/len) * sp;
+    player.vy = (ay/len) * sp;
+
+    // Face mouse
+    player.angle = Math.atan2(mouse.worldY - player.y, mouse.worldX - player.x);
+
+    // Shooting
+    if(mouse.down) shoot();
+    if(player.fireCooldown>0) player.fireCooldown -= dt;
+
+    // Move with collision
+    moveWithCollision(player, dt);
+
+    // Update bullets
+    for(let i=bullets.length-1;i>=0;i--){
+      const b = bullets[i];
+      b.x += b.vx*dt; b.y += b.vy*dt; b.life -= dt;
+      // bounce off walls a little (simple reflect)
+      let hit = false;
+      for(const w of walls){
+        if(circleRectIntersect(b.x,b.y,b.r,w.x,w.y,w.w,w.h)){
+          // reflect by checking which side is closer
+          const cx = clamp(b.x, w.x, w.x+w.w);
+          const cy = clamp(b.y, w.y, w.y+w.h);
+          const dx = b.x - cx; const dy = b.y - cy;
+          if(Math.abs(dx) > Math.abs(dy)) b.vx *= -0.8; else b.vy *= -0.8; // dampen
+          // move slightly out
+          b.x += Math.sign(b.vx)*4; b.y += Math.sign(b.vy)*4;
+          hit = true; break;
+        }
+      }
+      // hit dots
+      for(let j=dots.length-1;j>=0;j--){
+        const d = dots[j];
+        const dist2 = (d.x-b.x)*(d.x-b.x)+(d.y-b.y)*(d.y-b.y);
+        if(dist2 <= (d.r+b.r)*(d.r+b.r)){
+          d.hp -= Math.max(1, Math.floor(b.r/5));
+          b.life -= 0.15;
+          if(d.hp<=0){ player.xp += d.xp; dots.splice(j,1); placeDot(); }
+        }
+      }
+      if(b.life<=0 || b.x<0||b.y<0||b.x>WORLD.w||b.y>WORLD.h) bullets.splice(i,1);
+    }
+
+    // Level-up check
+    const need = xpForLevel(player.level);
+    if(player.xp >= need){ player.xp -= need; player.level++; player.points++; player.maxHp += 5; player.hp = Math.min(player.hp+5, player.maxHp); }
+
+    updateCamera();
+    draw();
+    requestAnimationFrame(tick);
+  }
+
+  // ===== Drawing =====
+  function drawGrid(){
+    const startX = Math.floor(camera.x/GRID)*GRID;
+    const startY = Math.floor(camera.y/GRID)*GRID;
+    ctx.lineWidth = 1;
+    ctx.strokeStyle = 'rgba(255,255,255,0.06)';
+    for(let x=startX; x<camera.x+canvas.width; x+=GRID){
+      ctx.beginPath(); ctx.moveTo(x-camera.x, 0); ctx.lineTo(x-camera.x, canvas.height); ctx.stroke();
+    }
+    for(let y=startY; y<camera.y+canvas.height; y+=GRID){
+      ctx.beginPath(); ctx.moveTo(0, y-camera.y); ctx.lineTo(canvas.width, y-camera.y); ctx.stroke();
+    }
+  }
+
+  function drawWalls(){
+    ctx.fillStyle = '#2a2f54';
+    for(const w of walls){
+      const x = w.x - camera.x, y = w.y - camera.y;
+      if(x+w.w<0||y+w.h<0||x>canvas.width||y>canvas.height) continue;
+      ctx.fillRect(x,y,w.w,w.h);
+    }
+  }
+
+  function drawDots(){
+    for(const d of dots){
+      const x = d.x - camera.x, y = d.y - camera.y;
+      if(x<-30||y<-30||x>canvas.width+30||y>canvas.height+30) continue;
+      ctx.beginPath(); ctx.arc(x,y,d.r,0,Math.PI*2);
+      ctx.fillStyle = d.color; ctx.fill();
+    }
+  }
+
+  function drawBullets(){
+    ctx.fillStyle = '#ffd08a';
+    for(const b of bullets){
+      const x = b.x - camera.x, y = b.y - camera.y;
+      ctx.beginPath(); ctx.arc(x,y,b.r,0,Math.PI*2); ctx.fill();
+    }
+  }
+
+  function drawPlayer(){
+    const x = player.x - camera.x, y = player.y - camera.y;
+    // body
+    ctx.beginPath(); ctx.arc(x,y,player.r,0,Math.PI*2); ctx.fillStyle = player.color; ctx.fill();
+    // barrel
+    ctx.save(); ctx.translate(x,y); ctx.rotate(player.angle);
+    ctx.fillStyle = '#c8e6ff';
+    ctx.fillRect(0,-5, player.r+14, 10);
+    ctx.restore();
+    // nameplate
+    ctx.font = '12px system-ui, sans-serif'; ctx.textAlign = 'center'; ctx.fillStyle = 'rgba(255,255,255,.9)';
+    ctx.fillText(player.name, x, y - player.r - 12);
+  }
+
+  function draw(){
+    ctx.clearRect(0,0,canvas.width,canvas.height);
+    drawGrid();
+    drawWalls();
+    drawDots();
+    drawBullets();
+    drawPlayer();
+    drawUI();
+    drawMinimap();
+  }
+
+  function drawUI(){
+    // Update chips
+    document.getElementById('playerName').textContent = player.name;
+    document.getElementById('levelText').textContent = player.level;
+    const need = xpForLevel(player.level);
+    document.getElementById('xpText').textContent = `${player.xp} / ${need}`;
+    const pct = clamp(player.xp / need, 0, 1) * 100;
+    document.getElementById('levelFill').style.width = pct + '%';
+  }
+
+  function drawMinimap(){
+    const m = document.getElementById('minimap');
+    const mctx = m.getContext('2d');
+    const mw = m.width, mh = m.height;
+    mctx.clearRect(0,0,mw,mh);
+    // border
+    mctx.fillStyle = 'rgba(255,255,255,0.08)';
+    mctx.fillRect(0,0,mw,mh);
+
+    const sx = mw / WORLD.w; const sy = mh / WORLD.h;
+    // walls
+    mctx.fillStyle = 'rgba(255,255,255,0.35)';
+    for(const w of walls){ mctx.fillRect(w.x*sx, w.y*sy, w.w*sx, w.h*sy); }
+    // player
+    mctx.fillStyle = '#6bd6ff';
+    mctx.beginPath(); mctx.arc(player.x*sx, player.y*sy, 4, 0, Math.PI*2); mctx.fill();
+
+    // camera viewport rectangle
+    mctx.strokeStyle = 'rgba(107,214,255,0.8)'; mctx.lineWidth = 1;
+    mctx.strokeRect(camera.x*sx, camera.y*sy, canvas.width*sx, canvas.height*sy);
+  }
+
+  // ===== Menu / Upgrades =====
+  const menuEl = document.getElementById('menu');
+  const pointsText = document.getElementById('pointsText');
+  function toggleMenu(){ menuEl.classList.toggle('active'); }
+  menuEl.addEventListener('click', (e)=>{ if(e.target===menuEl) toggleMenu(); });
+  for(const btn of menuEl.querySelectorAll('button[data-up]')){
+    btn.addEventListener('click', ()=>{
+      if(player.points<=0) return;
+      const key = btn.getAttribute('data-up');
+      player.stats[key]++;
+      player.points--;
+      if(key==='size') player.bulletSize += 1;
+      if(key==='reload') {/* handled in shoot cooldown */}
+      if(key==='speed') {/* additive in loop */}
+      if(key==='hp'){ player.maxHp += 10; player.hp = player.maxHp; }
+      updateUpgradeUI();
+    });
+  }
+  function updateUpgradeUI(){
+    pointsText.textContent = player.points;
+    document.getElementById('lvlSize').textContent = `Lv. ${player.stats.size}`;
+    document.getElementById('lvlReload').textContent = `Lv. ${player.stats.reload}`;
+    document.getElementById('lvlSpeed').textContent = `Lv. ${player.stats.speed}`;
+    document.getElementById('lvlHP').textContent = `Lv. ${player.stats.hp}`;
+  }
+
+  // ===== Start =====
+  updateUpgradeUI();
+  requestAnimationFrame(tick);
+  </script>
 </body>
 </html>
