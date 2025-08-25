@@ -1,6 +1,7 @@
 // =============================
 // Diep.io-like Game Script (Reworked)
 // =============================
+console.log("Game script loaded ✅");
 
 const canvas = document.getElementById("gameCanvas");
 const ctx = canvas.getContext("2d");
