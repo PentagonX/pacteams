@@ -2,282 +2,263 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>Diep.io Phase 2</title>
+<title>Diep.io Phase 4.2</title>
 <style>
-html, body {margin:0; padding:0; overflow:hidden; background:#111; font-family:sans-serif;}
-canvas {display:block; background:#222;}
-#statsBar{
-  position:absolute; bottom:0; left:0; width:100%; height:60px;
-  background: rgba(0,0,0,0.5); color:white; font-size:16px; padding:8px; box-sizing:border-box;
-}
+html,body{margin:0;padding:0;overflow:hidden;background:#111;font-family:sans-serif;}
+canvas{display:block;background:#222;}
+#statsBar{position:absolute;bottom:0;left:0;width:100%;height:60px;background:rgba(0,0,0,0.5);color:white;font-size:16px;padding:8px;box-sizing:border-box;}
+#menu{position:absolute;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.8);color:white;display:none;font-size:20px;padding:20px;box-sizing:border-box;display:flex;flex-direction:column;align-items:center;}
+#inventoryDisplay,#statsDisplay{padding:10px;width:90%;margin-bottom:20px;}
+.inventory-slot{width:60px;height:60px;border:2px solid white;display:inline-block;margin:5px;text-align:center;line-height:60px;}
+.active-item{border-color:yellow;}
 </style>
 </head>
 <body>
 <canvas id="gameCanvas"></canvas>
 <div id="statsBar"></div>
+<div id="menu">
+  <div id="inventoryDisplay"><h2>Inventory (Top 3 Active)</h2></div>
+  <div id="statsDisplay"><h2>Stats</h2></div>
+</div>
 <script>
-const canvas = document.getElementById("gameCanvas");
-const ctx = canvas.getContext("2d");
-canvas.width = window.innerWidth;
-canvas.height = window.innerHeight;
+const canvas=document.getElementById("gameCanvas");
+const ctx=canvas.getContext("2d");
+canvas.width=window.innerWidth; canvas.height=window.innerHeight;
 
-// World & player
-const world = {width:3000, height:3000};
-const player = {x:500, y:500, size:15, speed:3, hp:100, xp:0, level:1, reload:0, reloadTime:20, bulletSize:6};
-const keys = {};
-const mouse = {x:0, y:0};
-let shooting = false;
+const world={width:3000,height:3000};
+const player={x:500,y:500,size:15,speed:3,hp:100,maxHp:100,xp:0,level:1,reload:0,reloadTime:20,bulletSize:6,spread:1,rateBonus:0,shield:0};
+let keys={},mouse={x:0,y:0},shooting=false;
+const walls=[],enemies=[],xpOrbs=[],bullets=[],itemsInWorld=[];
+let inventory=[],showMenu=false,debugMode=false,dropChance=0.3;
 
-// Arrays
-const walls = [];
-const enemies = [];
-const xpOrbs = [];
-const bullets = [];
+const enemyNamesList=["RedFox","BlueWolf","IronTank","Shadow","Spike","Crusher","Blaze","Viper","Ghost","Omega"];
+const itemsList=[
+  {name:"Spread",type:"spread",color:"yellow",value:1},
+  {name:"Gatling",type:"rate",color:"orange",value:-5},
+  {name:"Mirror",type:"mirror",color:"purple",value:1},
+  {name:"Shield",type:"shield",color:"blue",value:20},
+  {name:"Cannon",type:"cannon",color:"red",value:2}
+];
 
-// Enemy names
-const enemyNamesList = ["RedFox","BlueWolf","IronTank","Shadow","Spike","Crusher","Blaze","Viper","Ghost","Omega"];
+// Walls
+for(let i=0;i<50;i++){for(let j=0;j<25;j++){if(Math.random()<0.4){if(Math.random()<0.5) walls.push({x:i*120+50,y:j*100+50,w:20,h:100}); else walls.push({x:i*120+50,y:j*100+50,w:100,h:20});}}}
 
-// Generate maze walls (vertical + horizontal)
-for(let i=0;i<50;i++){
-  for(let j=0;j<25;j++){
-    if(Math.random()<0.4){
-      if(Math.random()<0.5) walls.push({x:i*120+50, y:j*100+50, w:20, h:100});
-      else walls.push({x:i*120+50, y:j*100+50, w:100, h:20});
-    }
-  }
-}
-
-// Generate enemies
+// Enemies
 for(let i=0;i<30;i++){
-  const name = enemyNamesList[Math.floor(Math.random()*enemyNamesList.length)];
-  enemies.push({
-    x:Math.random()*world.width,
-    y:Math.random()*world.height,
-    size:20,
-    dx:(Math.random()*2-1)*1.5,
-    dy:(Math.random()*2-1)*1.5,
-    hp:50,
-    name:name,
-    reload:Math.floor(Math.random()*100)
-  });
+  const name=enemyNamesList[Math.floor(Math.random()*enemyNamesList.length)];
+  enemies.push({x:Math.random()*world.width,y:Math.random()*world.height,size:20,dx:(Math.random()*2-1)*1.5,dy:(Math.random()*2-1)*1.5,hp:50,name:name,reload:Math.floor(Math.random()*100)});
 }
 
-// Generate XP orbs
-for(let i=0;i<200;i++){
-  xpOrbs.push({x:Math.random()*world.width, y:Math.random()*world.height, size:8});
-}
+// XP orbs
+for(let i=0;i<200;i++) xpOrbs.push({x:Math.random()*world.width,y:Math.random()*world.height,size:8});
 
 // Controls
-window.addEventListener("keydown",e=>keys[e.key]=true);
-window.addEventListener("keyup",e=>keys[e.key]=false);
-canvas.addEventListener("mousemove",e=>{const r=canvas.getBoundingClientRect(); mouse.x=e.clientX-r.left; mouse.y=e.clientY-r.top;});
-canvas.addEventListener("mousedown",()=>shooting=true);
-canvas.addEventListener("mouseup",()=>shooting=false);
+window.addEventListener("keydown", e=>{
+  keys[e.key]=true;
+  if(e.key==="e") showMenu=!showMenu;
+  if(e.key==="[") debugMode=!debugMode;
+});
+window.addEventListener("keyup", e=>keys[e.key]=false);
+canvas.addEventListener("mousemove", e=>{const r=canvas.getBoundingClientRect(); mouse.x=e.clientX-r.left; mouse.y=e.clientY-r.top;});
+canvas.addEventListener("mousedown", ()=>shooting=true);
+canvas.addEventListener("mouseup", ()=>shooting=false);
 
-// Stats bar
-const statsBar = document.getElementById("statsBar");
-function updateStatsBar(){
+// Debug controls
+window.addEventListener("keydown", e=>{
+  if(!debugMode) return;
+  if(e.key==="1") dropChance=Math.min(1, dropChance+0.1);
+  if(e.key==="2") {const name=enemyNamesList[Math.floor(Math.random()*enemyNamesList.length)]; enemies.push({x:player.x+Math.random()*200-100, y:player.y+Math.random()*200-100, size:20, dx:0, dy:0, hp:50, name:name, reload:0});}
+  if(e.key==="3") {const it=itemsList[Math.floor(Math.random()*itemsList.length)]; itemsInWorld.push({...it,x:player.x+Math.random()*50-25,y:player.y+Math.random()*50-25,picked:false});}
+  if(e.key==="4") player.bulletSize+=2;
+  if(e.key==="5") player.spread+=1;
+});
+
+// UI
+const statsBar=document.getElementById("statsBar");
+const menu=document.getElementById("menu");
+const inventoryDisplay=document.getElementById("inventoryDisplay");
+const statsDisplay=document.getElementById("statsDisplay");
+
+function updateUI(){
   statsBar.innerHTML=`HP:${player.hp} Lvl:${player.level} XP:${player.xp}`;
+  menu.style.display=showMenu?"flex":"none";
+
+  // Show top 3 active items
+  inventoryDisplay.innerHTML="<h2>Inventory (Top 3 Active)</h2>";
+  const activeItems = inventory.slice(0,3);
+  for(let it of activeItems){
+    const div=document.createElement("div");
+    div.className="inventory-slot active-item";
+    div.style.background=it.color;
+    div.innerText=it.name;
+    inventoryDisplay.appendChild(div);
+  }
+  // Rest of inventory
+  for(let i=3;i<inventory.length;i++){
+    const it=inventory[i];
+    const div=document.createElement("div");
+    div.className="inventory-slot";
+    div.style.background=it.color;
+    div.innerText=it.name;
+    inventoryDisplay.appendChild(div);
+  }
+
+  statsDisplay.innerHTML=`<h2>Stats</h2>HP:${player.hp}/${player.maxHp+player.shield}<br>Spread:${player.spread}<br>Rate Bonus:${player.rateBonus}<br>Cannon:${player.bulletSize}<br>Drop Chance:${Math.round(dropChance*100)}%`;
 }
 
-// Collision helper
-function collideRect(a,b){
-  return !(a.x+a.size<b.x || a.x-a.size>b.x+b.w || a.y+a.size<b.y || a.y-a.size>b.y+b.h);
-}
+// Collision
+function collideRect(a,b){return!(a.x+a.size<b.x||a.x-a.size>b.x+b.w||a.y+a.size<b.y||a.y-a.size>b.y+b.h);}
+function collideCircle(a,b){return Math.hypot(a.x-b.x,a.y-b.y)<a.size+b.size;}
 
-// Player movement with sliding along walls
+// Player movement
 function movePlayer(){
-  let dx=0, dy=0;
-  if(keys['w']) dy -= player.speed;
-  if(keys['s']) dy += player.speed;
-  if(keys['a']) dx -= player.speed;
-  if(keys['d']) dx += player.speed;
-
-  // Attempt X movement
-  player.x += dx;
-  for(const w of walls){
-    if(collideRect(player, w)){
-      if(dx>0) player.x = w.x - player.size;
-      else if(dx<0) player.x = w.x + w.w + player.size;
-    }
-  }
-  // Attempt Y movement
-  player.y += dy;
-  for(const w of walls){
-    if(collideRect(player, w)){
-      if(dy>0) player.y = w.y - player.size;
-      else if(dy<0) player.y = w.y + w.h + player.size;
-    }
-  }
+  let dx=0,dy=0;
+  if(keys['w']) dy-=player.speed;
+  if(keys['s']) dy+=player.speed;
+  if(keys['a']) dx-=player.speed;
+  if(keys['d']) dx+=player.speed;
+  player.x+=dx;
+  for(const w of walls) if(collideRect(player,w)){if(dx>0)player.x=w.x-player.size; else if(dx<0)player.x=w.x+w.w+player.size;}
+  player.y+=dy;
+  for(const w of walls) if(collideRect(player,w)){if(dy>0)player.y=w.y-player.size; else if(dy<0)player.y=w.y+w.h+player.size;}
+  if(player.x<player.size) player.x=player.size;
+  if(player.y<player.size) player.y=player.size;
+  if(player.x>world.width-player.size) player.x=world.width-player.size;
+  if(player.y>world.height-player.size) player.y=world.height-player.size;
 }
 
-// Enemy collision with walls and each other
+// Enemy AI & shooting
 function moveEnemies(){
   for(let e of enemies){
-    e.x += e.dx; e.y += e.dy;
-    // Walls
-    for(const w of walls){
-      if(collideRect(e,w)){
-        if(e.dx>0) e.x = w.x - e.size;
-        else if(e.dx<0) e.x = w.x + w.w + e.size;
-        if(e.dy>0) e.y = w.y - e.size;
-        else if(e.dy<0) e.y = w.y + w.h + e.size;
-        e.dx *= -1; e.dy *= -1;
-      }
-    }
-    // Other enemies
-    for(const other of enemies){
-      if(other===e) continue;
-      const dist = Math.hypot(e.x-other.x, e.y-other.y);
-      if(dist<e.size+other.size){
-        const angle=Math.atan2(e.y-other.y,e.x-other.x);
-        const overlap=(e.size+other.size)-dist;
-        e.x += Math.cos(angle)*overlap*0.5;
-        e.y += Math.sin(angle)*overlap*0.5;
-      }
-    }
-    // Shoot at player
+    e.x+=e.dx;e.y+=e.dy;
+    for(const w of walls) if(collideRect(e,w)){if(e.dx>0)e.x=w.x-e.size;else if(e.dx<0)e.x=w.x+w.w+e.size;if(e.dy>0)e.y=w.y-e.size;else if(e.dy<0)e.y=w.y+w.h+e.size;e.dx*=-1;e.dy*=-1;}
+    for(const other of enemies){if(other===e)continue;const dist=Math.hypot(e.x-other.x,e.y-other.y);if(dist<e.size+other.size){const angle=Math.atan2(e.y-other.y,e.x-other.x);const overlap=(e.size+other.size)-dist;e.x+=Math.cos(angle)*overlap*0.5;e.y+=Math.sin(angle)*overlap*0.5;}}
     e.reload--;
     if(e.reload<=0){
-      const angle = Math.atan2(player.y - e.y, player.x - e.x);
-      bullets.push({x:e.x, y:e.y, dx:Math.cos(angle)*5, dy:Math.sin(angle)*5, size:5, bounces:3, owner:"enemy"});
-      e.reload = 80 + Math.random()*50;
+      const angle=Math.atan2(player.y-e.y,player.x-e.x);
+      bullets.push({x:e.x,y:e.y,dx:Math.cos(angle)*5,dy:Math.sin(angle)*5,size:5,bounces:3,owner:"enemy"});
+      e.reload=80+Math.random()*50;
     }
   }
 }
 
-// XP orbs attracted to player
+// XP orbs
 function moveXPOrbs(){
   for(const orb of xpOrbs){
-    const dx = player.x - orb.x;
-    const dy = player.y - orb.y;
-    const dist = Math.hypot(dx,dy);
-    if(dist<150){
-      orb.x += dx*0.05;
-      orb.y += dy*0.05;
-    }
-    // Check collection
-    if(dist<player.size + orb.size){
-      player.xp += 1;
-      orb.x = Math.random()*world.width;
-      orb.y = Math.random()*world.height;
-    }
+    const dx=player.x-orb.x,dy=player.y-orb.y;
+    const dist=Math.hypot(dx,dy);
+    if(dist<150){orb.x+=dx*0.05; orb.y+=dy*0.05;}
+    if(dist<player.size+orb.size){player.xp++; orb.x=Math.random()*world.width; orb.y=Math.random()*world.height;}
   }
 }
 
 // Player shooting
 function playerShoot(){
   if(shooting && player.reload<=0){
-    const angle = Math.atan2(mouse.y - canvas.height/2, mouse.x - canvas.width/2);
-    bullets.push({x:player.x, y:player.y, dx:Math.cos(angle)*6, dy:Math.sin(angle)*6, size:player.bulletSize, bounces:3, owner:"player"});
-    player.reload = player.reloadTime;
+    for(let s=0;s<player.spread;s++){
+      const angle=Math.atan2(mouse.y-canvas.height/2, mouse.x-canvas.width/2)+(s-(player.spread-1)/2)*0.1;
+      bullets.push({x:player.x, y:player.y, dx:Math.cos(angle)*(6+player.bulletSize/2), dy:Math.sin(angle)*(6+player.bulletSize/2), size:player.bulletSize, bounces:3, owner:"player"});
+    }
+    player.reload=player.reloadTime+player.rateBonus;
   }
   if(player.reload>0) player.reload--;
 }
 
-// Bullets movement
+// Move bullets & collisions
 function moveBullets(){
   for(let i=bullets.length-1;i>=0;i--){
-    const b = bullets[i];
-    b.x += b.dx;
-    b.y += b.dy;
-    // Bounce off walls
+    const b=bullets[i];
+    b.x+=b.dx; b.y+=b.dy;
     for(const w of walls){
-      if(collideRect({x:b.x, y:b.y, size:b.size}, w)){
-        if(b.x > w.x && b.x < w.x+w.w) b.dy *= -1;
-        else b.dx *= -1;
-        b.bounces--;
-        if(b.bounces<=0){ bullets.splice(i,1); break; }
+      if(collideRect({x:b.x,y:b.y,size:b.size},w)){
+        if(b.x>w.x && b.x<w.x+w.w) b.dy*=-1; else b.dx*=-1;
+        b.bounces--; if(b.bounces<=0){bullets.splice(i,1); break;}
       }
     }
-    // Remove off-map
     if(b.x<0||b.y<0||b.x>world.width||b.y>world.height) bullets.splice(i,1);
-    // Damage enemies
     if(b.owner==="player"){
       for(let j=enemies.length-1;j>=0;j--){
-        const e = enemies[j];
-        if(Math.hypot(b.x-e.x, b.y-e.y)<b.size+e.size){
-          e.hp -= 20;
-          bullets.splice(i,1);
+        const e=enemies[j];
+        if(Math.hypot(b.x-e.x,b.y-e.y)<b.size+e.size){
+          e.hp-=20; bullets.splice(i,1);
           if(e.hp<=0){
-            enemies.splice(j,1);
-            for(let k=0;k<3;k++) xpOrbs.push({x:e.x+Math.random()*20-10, y:e.y+Math.random()*20-10, size:8});
+            for(let k=0;k<3;k++) xpOrbs.push({x:e.x+Math.random()*20-10,y:e.y+Math.random()*20-10,size:8});
+            if(Math.random()<dropChance){const it=itemsList[Math.floor(Math.random()*itemsList.length)]; it.x=e.x; it.y=e.y; it.picked=false; itemsInWorld.push(it);}
+            enemies.splice(j,1); break;
           }
-          break;
         }
       }
     }
-    // Damage player
-    if(b.owner==="enemy" && Math.hypot(b.x-player.x, b.y-player.y)<b.size+player.size){
-      player.hp -= 5;
-      bullets.splice(i,1);
+    if(b.owner==="enemy" && Math.hypot(b.x-player.x,b.y-player.y)<b.size+player.size){player.hp-=5; bullets.splice(i,1);}
+  }
+}
+
+// Pick up items
+function pickupItems(){
+  for(let i=itemsInWorld.length-1;i>=0;i--){
+    const item=itemsInWorld[i];
+    if(!item.picked && Math.hypot(player.x-item.x,player.y-item.y)<player.size+15){
+      inventory.push(item);
+      item.picked=true;
+      itemsInWorld.splice(i,1);
     }
   }
 }
 
-// Draw everything
+// Draw
 function draw(){
   ctx.clearRect(0,0,canvas.width,canvas.height);
-  const camX = player.x - canvas.width/2;
-  const camY = player.y - canvas.height/2;
+  const camX=player.x-canvas.width/2, camY=player.y-canvas.height/2;
+  ctx.fillStyle="#555"; for(const w of walls) ctx.fillRect(w.x-camX,w.y-camY,w.w,w.h);
+  ctx.fillStyle="green"; for(const orb of xpOrbs){ctx.beginPath();ctx.arc(orb.x-camX,orb.y-camY,orb.size,0,Math.PI*2);ctx.fill();}
 
-  // Draw walls
-  ctx.fillStyle="#555";
-  for(const w of walls) ctx.fillRect(w.x-camX, w.y-camY, w.w, w.h);
-
-  // Draw XP orbs
-  ctx.fillStyle="green";
-  for(const orb of xpOrbs){
+  // Draw items
+  for(const item of itemsInWorld){
+    ctx.fillStyle=item.color;
     ctx.beginPath();
-    ctx.arc(orb.x-camX, orb.y-camY, orb.size,0,Math.PI*2);
+    ctx.arc(item.x-camX,item.y-camY,15,0,Math.PI*2);
     ctx.fill();
-  }
-
-  // Draw enemies
-  ctx.fillStyle="red";
-  ctx.font="14px sans-serif";
-  ctx.textAlign="center";
-  for(const e of enemies){
-    ctx.beginPath();
-    ctx.arc(e.x-camX, e.y-camY, e.size,0,Math.PI*2);
-    ctx.fill();
-    // Name
+    ctx.strokeStyle="white";
+    ctx.lineWidth=2;
+    ctx.stroke();
     ctx.fillStyle="white";
-    ctx.fillText(e.name, e.x-camX, e.y-camY - e.size - 5);
-    ctx.fillStyle="red";
+    ctx.font="12px sans-serif";
+    ctx.fillText(item.name,item.x-camX,item.y-camY-20);
   }
 
-  // Draw bullets
-  for(const b of bullets){
-    ctx.fillStyle=b.owner==="player"?"white":"orange";
-    ctx.beginPath();
-    ctx.arc(b.x-camX, b.y-camY, b.size,0,Math.PI*2);
-    ctx.fill();
+  ctx.font="14px sans-serif"; ctx.textAlign="center";
+  for(const e of enemies){
+    ctx.fillStyle="red"; ctx.beginPath();ctx.arc(e.x-camX,e.y-camY,e.size,0,Math.PI*2);ctx.fill();
+    const dx=player.x-e.x,dy=player.y-e.y,dist=Math.hypot(dx,dy),len=Math.min(dist,50);
+    ctx.strokeStyle="orange"; ctx.beginPath(); ctx.moveTo(e.x-camX,e.y-camY); ctx.lineTo(e.x-camX+dx/dist*len,e.y-camY+dy/dist*len); ctx.stroke();
+    ctx.fillStyle="white"; ctx.fillText(e.name,e.x-camX,e.y-camY-e.size-5);
+  }
+  for(const b of bullets){ctx.fillStyle=b.owner==="player"?"white":"orange";ctx.beginPath();ctx.arc(b.x-camX,b.y-camY,b.size,0,Math.PI*2);ctx.fill();}
+
+  ctx.fillStyle="blue"; ctx.beginPath();ctx.arc(canvas.width/2,canvas.height/2,player.size,0,Math.PI*2);ctx.fill();
+  const pdx=mouse.x-canvas.width/2,pdy=mouse.y-canvas.height/2,pdist=Math.hypot(pdx,pdy),plen=Math.min(pdist,50);
+  ctx.strokeStyle="white"; ctx.beginPath(); ctx.moveTo(canvas.width/2,canvas.height/2); ctx.lineTo(canvas.width/2+pdx/pdist*plen,canvas.height/2+pdy/pdist*plen); ctx.stroke();
+  ctx.fillStyle="green"; ctx.fillRect(canvas.width/2-player.size,canvas.height/2-player.size-10,player.size*2*(player.hp/(player.maxHp+player.shield)),5);
+
+  // Debug menu
+  if(debugMode){
+    ctx.fillStyle="rgba(0,0,0,0.8)";
+    ctx.fillRect(50,50,400,300);
+    ctx.fillStyle="white";
+    ctx.font="16px sans-serif";
+    ctx.fillText("DEBUG MENU", 250, 80);
+    ctx.fillText("Press 1: Increase drop chance", 100, 120);
+    ctx.fillText("Press 2: Spawn enemy", 100, 160);
+    ctx.fillText("Press 3: Spawn item", 100, 200);
+    ctx.fillText("Press 4: Increase bullet size", 100, 240);
+    ctx.fillText("Press 5: Increase bullet spread", 100, 280);
   }
 
-  // Draw player
-  ctx.fillStyle="blue";
-  ctx.beginPath();
-  ctx.arc(canvas.width/2, canvas.height/2, player.size,0,Math.PI*2);
-  ctx.fill();
-  // HP bar
-  ctx.fillStyle="green";
-  ctx.fillRect(canvas.width/2 - player.size, canvas.height/2 - player.size -10, player.size*2*(player.hp/100),5);
-
-  updateStatsBar();
+  updateUI();
 }
 
 // Game loop
-function loop(){
-  movePlayer();
-  moveEnemies();
-  moveXPOrbs();
-  playerShoot();
-  moveBullets();
-  draw();
-  requestAnimationFrame(loop);
-}
-
+function loop(){movePlayer();moveEnemies();moveXPOrbs();playerShoot();moveBullets();pickupItems();draw(); requestAnimationFrame(loop);}
 loop();
 </script>
 </body>
